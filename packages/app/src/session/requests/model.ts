@@ -46,6 +46,7 @@ export function createSessionRequestModel() {
 
     return id ? data.session.get(id)?.location : undefined
   })
+
   createEffect(() => {
     const ref = location()
 

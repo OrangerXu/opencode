@@ -2,18 +2,21 @@ import { describe, expect, test } from "bun:test"
 import type { FormInfo, PermissionRequest, SessionInfo } from "@opencode/client/promise"
 import { sessionPermissionRequest, sessionFormRequest, sessionTreeIDs } from "@/session/requests/session-request-tree"
 
+// SAFETY: the request tree reads only a session's id and parentID.
 const session = (input: { id: string; parentID?: string }) =>
   ({
     id: input.id,
     parentID: input.parentID,
   }) as SessionInfo
 
+// SAFETY: the request tree reads only a permission's id and sessionID.
 const permission = (id: string, sessionID: string) =>
   ({
     id,
     sessionID,
   }) as PermissionRequest
 
+// SAFETY: the request tree reads only a form's id, sessionID, and metadata kind.
 const question = (id: string, sessionID: string) =>
   ({
     id,

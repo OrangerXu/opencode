@@ -1,7 +1,8 @@
 import { For, Match, Show, Switch as Branch, createMemo } from "solid-js"
+import { Option, Schema } from "effect"
 import { createStore } from "solid-js/store"
 import { useMutation } from "@tanstack/solid-query"
-import type { FormAnswer, FormInfo, FormValue, LocationRef } from "@opencode/client/promise"
+import type { FormAnswer, FormInfo, FormStringField, FormValue, LocationRef } from "@opencode/client/promise"
 import { Button } from "@opencode/ui/button"
 import { Checkbox } from "@opencode/ui/checkbox"
 import { Select } from "@opencode/ui/select"
@@ -16,6 +17,13 @@ import "./session-elicitation-dock.css"
 
 type Field = FormInfo["fields"][number]
 
+const decodeMessage = Schema.decodeUnknownOption(Schema.String)
+
+const inputTypes = { email: "email", uri: "url", date: "text", "date-time": "text" } as const satisfies Record<
+  NonNullable<FormStringField["format"]>,
+  string
+>
+
 export function SessionElicitationDock(props: {
   request: FormInfo & { location?: LocationRef }
   onSubmit: () => void
@@ -24,37 +32,52 @@ export function SessionElicitationDock(props: {
   const platform = usePlatform()
   const data = useData()
   const fields = createMemo(() => props.request.fields.filter((field) => !("hidden" in field && field.hidden)))
-  const message = () => {
-    const value = props.request.metadata?.message
-    return typeof value === "string" ? value : undefined
-  }
-  const [values, setValues] = createStore<Record<string, FormValue | undefined>>(
-    Object.fromEntries(props.request.fields.map((field) => [field.key, initial(field)])),
-  )
+
+  const message = () => Option.getOrUndefined(decodeMessage(props.request.metadata?.message))
+
   // Number inputs keep their raw text so a half-typed value such as "-" is not discarded.
-  const [numbers, setNumbers] = createStore<Record<string, string>>(
-    Object.fromEntries(
+  const [values, setValues] = createStore<{
+    text: Record<string, string>
+    number: Record<string, string>
+    flag: Record<string, boolean>
+    list: Record<string, string[]>
+  }>({
+    text: Object.fromEntries(
+      props.request.fields.flatMap((field) => (field.type === "string" ? [[field.key, field.default ?? ""]] : [])),
+    ),
+    number: Object.fromEntries(
       props.request.fields.flatMap((field) =>
-        (field.type === "number" || field.type === "integer") && typeof field.default === "number"
+        (field.type === "number" || field.type === "integer") && field.default !== undefined
           ? [[field.key, String(field.default)]]
           : [],
       ),
     ),
-  )
+    flag: Object.fromEntries(
+      props.request.fields.flatMap((field) => (field.type === "boolean" ? [[field.key, field.default ?? false]] : [])),
+    ),
+    list: Object.fromEntries(
+      props.request.fields.flatMap((field) =>
+        field.type === "multiselect" ? [[field.key, [...(field.default ?? [])]]] : [],
+      ),
+    ),
+  })
 
-  const fail = (error: Error) =>
-    showToast({ title: language.t("common.requestFailed"), description: error.message })
+  const fail = (error: Error) => showToast({ title: language.t("common.requestFailed"), description: error.message })
+
   const input = () => ({ sessionID: props.request.sessionID, formID: props.request.id })
+
   const reply = useMutation(() => ({
     mutationFn: (answer: FormAnswer) => data.session.form.reply({ ...input(), answer }, props.request.location),
     onMutate: props.onSubmit,
     onError: fail,
   }))
+
   const cancel = useMutation(() => ({
     mutationFn: () => data.session.form.cancel(input(), props.request.location),
     onMutate: props.onSubmit,
     onError: fail,
   }))
+
   const sending = () => reply.isPending || cancel.isPending
 
   const submit = () => {
@@ -63,13 +86,20 @@ export function SessionElicitationDock(props: {
       Object.fromEntries(
         fields().flatMap((field): Array<[string, FormValue]> => {
           if (field.type === "external") return [[field.key, true]]
-          if (field.type === "number" || field.type === "integer") {
-            const text = numbers[field.key]?.trim()
-            return text ? [[field.key, Number(text)]] : []
+
+          if (field.type === "boolean") return [[field.key, values.flag[field.key] ?? false]]
+
+          if (field.type === "multiselect") {
+            const list = values.list[field.key] ?? []
+
+            return list.length ? [[field.key, list]] : []
           }
-          const value = values[field.key]
-          if (value === undefined || value === "" || (Array.isArray(value) && value.length === 0)) return []
-          return [[field.key, value]]
+
+          const text = (field.type === "string" ? values.text[field.key] : values.number[field.key])?.trim()
+
+          if (!text) return []
+
+          return [[field.key, field.type === "string" ? text : Number(text)]]
         }),
       ),
     )
@@ -81,11 +111,15 @@ export function SessionElicitationDock(props: {
         kind="question"
         onKeyDown={(event) => {
           if (event.defaultPrevented) return
+
           if (event.key === "Escape") {
             event.preventDefault()
+
             if (!sending()) cancel.mutate()
+
             return
           }
+
           if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.altKey) {
             event.preventDefault()
             submit()
@@ -131,8 +165,8 @@ export function SessionElicitationDock(props: {
                     <Label field={field} />
                     <Switch
                       hideLabel
-                      checked={values[field.key] === true}
-                      onChange={(checked) => setValues(field.key, checked)}
+                      checked={values.flag[field.key] === true}
+                      onChange={(checked) => setValues("flag", field.key, checked)}
                       disabled={sending()}
                     >
                       {field.title ?? field.key}
@@ -144,10 +178,10 @@ export function SessionElicitationDock(props: {
                       type="number"
                       numeric
                       step={field.type === "integer" ? 1 : "any"}
-                      value={numbers[field.key] ?? ""}
+                      value={values.number[field.key] ?? ""}
                       disabled={sending()}
                       aria-label={field.title ?? field.key}
-                      onInput={(event) => setNumbers(field.key, event.currentTarget.value)}
+                      onInput={(event) => setValues("number", field.key, event.currentTarget.value)}
                     />
                   </Match>
                   <Match when={field.type === "string" && field.options?.length ? field : undefined}>
@@ -157,10 +191,10 @@ export function SessionElicitationDock(props: {
                         <Select
                           aria-label={select().title ?? select().key}
                           options={select().options ?? []}
-                          current={select().options?.find((option) => option.value === values[select().key])}
+                          current={select().options?.find((option) => option.value === values.text[select().key])}
                           value={(option) => option.value}
                           label={(option) => option.label}
-                          onSelect={(option) => setValues(select().key, option?.value)}
+                          onSelect={(option) => setValues("text", select().key, option?.value ?? "")}
                           placeholder={language.t("session.elicitation.selectPlaceholder")}
                           disabled={sending()}
                         />
@@ -172,12 +206,12 @@ export function SessionElicitationDock(props: {
                       <>
                         <Label field={text()} />
                         <TextInput
-                          type={text().format === "email" ? "email" : text().format === "uri" ? "url" : "text"}
-                          value={textValue(values[text().key])}
+                          type={inputType(text().format)}
+                          value={values.text[text().key] ?? ""}
                           placeholder={text().placeholder}
                           disabled={sending()}
                           aria-label={text().title ?? text().key}
-                          onInput={(event) => setValues(text().key, event.currentTarget.value)}
+                          onInput={(event) => setValues("text", text().key, event.currentTarget.value)}
                         />
                       </>
                     )}
@@ -189,13 +223,13 @@ export function SessionElicitationDock(props: {
                         <For each={multi().options}>
                           {(option) => (
                             <Checkbox
-                              checked={selected(values[multi().key]).includes(option.value)}
+                              checked={(values.list[multi().key] ?? []).includes(option.value)}
                               disabled={sending()}
                               onChange={(checked) =>
-                                setValues(multi().key, (current) =>
+                                setValues("list", multi().key, (current = []) =>
                                   checked
-                                    ? [...selected(current), option.value]
-                                    : selected(current).filter((value) => value !== option.value),
+                                    ? [...current, option.value]
+                                    : current.filter((value) => value !== option.value),
                                 )
                               }
                             >
@@ -249,17 +283,6 @@ function Label(props: { field: Field }) {
   )
 }
 
-function initial(field: Field): FormValue | undefined {
-  if (field.type === "boolean") return field.default ?? false
-  if (field.type === "string") return field.default
-  if (field.type === "multiselect") return field.default ? [...field.default] : []
-  return undefined
-}
-
-function textValue(value: FormValue | undefined) {
-  return typeof value === "string" ? value : ""
-}
-
-function selected(value: FormValue | undefined) {
-  return Array.isArray(value) ? value : []
+function inputType(format: FormStringField["format"]) {
+  return format ? inputTypes[format] : "text"
 }
