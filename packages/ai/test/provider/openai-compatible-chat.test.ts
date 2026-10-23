@@ -233,12 +233,16 @@ describe("OpenAI-compatible Chat route", () => {
   it.effect("normalizes tool call IDs for the selected model family", () =>
     Effect.gen(function* () {
       const longID = `call_${"a".repeat(48)}`
+      // Mistral-family IDs fold onto 9 alphanumerics: its own 9-character
+      // IDs pass through, longer ones hash over the whole ID so distinct IDs
+      // stay distinct (#58323) — the first case's ID shares its prefix with
+      // the 16-character ones and must not collapse onto it.
       const cases = [
-        { provider: "custom", model: "mistral-small", id: "toolu_01CBhTTz95qkd9LJMdC9sf8t", expected: "toolu01CB" },
+        { provider: "custom", model: "mistral-small", id: "toolu_01CBhTTz95qkd9LJMdC9sf8t", expected: "jmdc9sf8t" },
         { provider: "custom", model: "devstral-small", id: "abc", expected: "abc000000" },
-        { provider: "custom", model: "codestral-latest", id: "toolu_01CBhTTz95", expected: "toolu01CB" },
-        { provider: "custom", model: "pixtral-large", id: "toolu_01CBhTTz95", expected: "toolu01CB" },
-        { provider: "custom", model: "open-mixtral-8x22b", id: "toolu_01CBhTTz95", expected: "toolu01CB" },
+        { provider: "custom", model: "codestral-latest", id: "toolu_01CBhTTz95", expected: "1cbhttz95" },
+        { provider: "custom", model: "pixtral-large", id: "toolu_01CBhTTz95", expected: "1cbhttz95" },
+        { provider: "custom", model: "open-mixtral-8x22b", id: "toolu_01CBhTTz95", expected: "1cbhttz95" },
         { provider: "gateway", model: "anthropic/claude-sonnet-4", id: "call|item/+", expected: "call_item__" },
         { provider: "gateway", model: "openai/gpt-4o", id: longID, expected: longID.slice(0, 40) },
         { provider: "custom", model: "ordinary-model", id: "call|item/+", expected: "call|item/+" },

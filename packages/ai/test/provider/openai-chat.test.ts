@@ -588,6 +588,57 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
+  it.effect("keeps Mistral-family tool call IDs unique when a longer ID collapses onto one prefix (#58323)", () =>
+    Effect.gen(function* () {
+      // GLM behind a mistral-named gateway route: every ID shares the
+      // `chatcmpl-tool-` prefix, so a 9-character prefix slice maps all of
+      // them onto `chatcmplt` and parallel calls are rejected as duplicates.
+      const glm = LanguageModel.update(model, { id: "mistral/zai-glm-5-3-flash" })
+      const ids = [
+        "chatcmpl-tool-99557ad68a6e6efc",
+        "chatcmpl-tool-99557ad68a6e6efd",
+        "chatcmpl-tool-99557ad68a6e6efe",
+      ]
+      const history = () => [
+        Message.assistant(ids.map((id) => ToolCallPart.make({ id, name: "lookup", input: {} }))),
+        ...ids.map((id) => Message.tool({ id, name: "lookup", result: "Sunny" })),
+      ]
+      const prepared = yield* compileRequest(LLM.request({ model: glm, messages: history() }))
+
+      const lowered = (prepared.body as any).messages.flatMap((m: any) =>
+        m.role === "assistant" ? (m.tool_calls ?? []).map((c: any) => c.id) : [m.tool_call_id],
+      )
+      expect(lowered).toHaveLength(6)
+      expect(new Set(lowered).size).toBe(3)
+      for (const id of lowered) expect(id).toMatch(/^[a-zA-Z0-9]{9}$/)
+
+      // deterministic across requests: the same history lowers onto the
+      // same values every time
+      const again = yield* compileRequest(LLM.request({ model: glm, messages: history() }))
+      expect((again.body as any).messages).toEqual((prepared.body as any).messages)
+    }),
+  )
+
+  it.effect("keeps Mistral's own 9-character tool call IDs unchanged", () =>
+    Effect.gen(function* () {
+      const mistral = LanguageModel.update(model, { id: "mistral-large-4-0" })
+      const prepared = yield* compileRequest(
+        LLM.request({
+          model: mistral,
+          messages: [
+            Message.assistant([ToolCallPart.make({ id: "xK9Qm2Lpa", name: "lookup", input: {} })]),
+            Message.tool({ id: "xK9Qm2Lpa", name: "lookup", result: "Sunny" }),
+          ],
+        }),
+      )
+
+      expect(prepared.body.messages).toMatchObject([
+        { role: "assistant", tool_calls: [{ id: "xK9Qm2Lpa" }] },
+        { role: "tool", tool_call_id: "xK9Qm2Lpa" },
+      ])
+    }),
+  )
+
   it.effect("preserves structured tool errors for the model", () =>
     Effect.gen(function* () {
       const error = { error: { type: "unknown", message: "Tool execution interrupted" } }

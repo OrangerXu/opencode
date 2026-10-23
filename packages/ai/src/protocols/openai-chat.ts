@@ -331,6 +331,32 @@ interface LoweringOptions {
   readonly assistant?: (source: LLMRequest["messages"][number], message: OpenAIChatMessage) => OpenAIChatMessage
 }
 
+/**
+ * Mistral caps tool-call IDs at 9 alphanumeric characters. Its own IDs are 9
+ * random characters and pass through, but IDs from other models served
+ * behind a mistral-prefixed name (GLM through a gateway: `chatcmpl-tool-<hex>`)
+ * share their prefix, so slicing the first 9 collapses every call in a
+ * history onto one value and parallel calls die as `Duplicate tool call id`
+ * (#58323). Longer IDs are folded into 9 alphanumerics with a base-36 rolling
+ * hash of the whole ID instead — deterministic across requests, so a stored
+ * history keeps mapping onto the same values, and distinct IDs stay distinct.
+ */
+const mistralToolCallID = (id: string): string => {
+  const cleaned = id.replace(/[^a-zA-Z0-9]/g, "")
+  if (cleaned.length <= 9) return cleaned.padEnd(9, "0")
+  const digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+  let hash = 0
+  for (let i = 0; i < cleaned.length; i++) {
+    hash = (hash * 36 + digits.indexOf(cleaned[i]!.toLowerCase())) % 36 ** 9
+  }
+  let short = ""
+  for (let i = 0; i < 9; i++) {
+    short = digits[hash % 36]! + short
+    hash = Math.floor(hash / 36)
+  }
+  return short
+}
+
 const lowerTool = (tool: ToolDefinition, options: LoweringOptions, supportsStrictMode: boolean): OpenAIChatTool => ({
   type: "function",
   function: {
@@ -579,11 +605,7 @@ const lowerMessages = Effect.fnUntraced(function* (request: LLMRequest, options:
     ...options,
     providerMetadataKey: request.model.route.providerMetadataKey ?? request.model.provider,
     toolCallID: (id: string) => {
-      if (mistral)
-        return id
-          .replace(/[^a-zA-Z0-9]/g, "")
-          .slice(0, 9)
-          .padEnd(9, "0")
+      if (mistral) return mistralToolCallID(id)
       if (modelID.includes("claude")) return id.replace(/[^a-zA-Z0-9_-]/g, "_")
       if (request.model.provider === "openai" || request.model.provider === "azure" || modelID.startsWith("openai/"))
         return id.slice(0, 40)
