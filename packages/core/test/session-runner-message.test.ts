@@ -726,6 +726,40 @@ Earlier work
     expect(messages[0]?.content.filter((part) => part.type === "media")).toHaveLength(4)
   })
 
+  test("strips NUL bytes from replayed tool text so NUL-rejecting providers accept the session", () => {
+    // A shell capture recorded before the tool stripped NUL (e.g. a
+    // git-uploadpack advertisement `HEADmulti_ack`) poisons the session
+    // for providers that reject NUL in request strings (#58354).
+    const messages = toLLMMessages(
+      [
+        SessionMessage.Assistant.make({
+          id: id("assistant"),
+          type: "assistant",
+          agent: build,
+          model: { id: Model.ID.make("model"), providerID: Provider.ID.make("provider") },
+          content: [
+            SessionMessage.AssistantTool.make({
+              type: "tool",
+              id: "completed",
+              name: "bash",
+              state: SessionMessage.ToolStateCompleted.make({
+                status: "completed",
+                input: { command: "git upload-pack" },
+                content: [{ type: "text", text: `003dsha HEAD${String.fromCharCode(0)}multi_ack thin-pack` }],
+              }),
+              time: { created, completed: created },
+            }),
+          ],
+          time: { created },
+        }),
+      ],
+      model,
+    )
+    const text = JSON.stringify(messages)
+    expect(text.includes(String.fromCharCode(0))).toBe(false)
+    expect(text).toContain("HEADmulti_ack")
+  })
+
   test("replays durable tool media into canonical tool messages without structured base64", () => {
     const messages = toLLMMessages(
       [
