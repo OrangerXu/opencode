@@ -94,11 +94,15 @@ const run = Effect.fnUntraced(function* (
       },
       session: {
         get: (input) => Effect.succeed({ ...sessionInfo, id: input.sessionID, agent: currentAgent }),
-        hook: (name, callback) => {
-          if (name === "context") contextHook = callback as (input: SessionContext) => Effect.Effect<void>
-          if (name === "prompt") promptHook = callback as unknown as (input: SessionHooks["prompt"]) => Effect.Effect<void>
-          return Effect.succeed({ dispose: Effect.void })
-        },
+        // Record the callback only when the returned Effect runs, matching the
+        // real registration (PluginHooks.register): a hook registered without
+        // yield* in the plugin stays invisible to these tests too (#58287).
+        hook: (name, callback) =>
+          Effect.sync(() => {
+            if (name === "context") contextHook = callback as (input: SessionContext) => Effect.Effect<void>
+            if (name === "prompt") promptHook = callback as unknown as (input: SessionHooks["prompt"]) => Effect.Effect<void>
+            return { dispose: Effect.void }
+          }),
         synthetic: (input) => {
           persisted.push(input.text)
           return Effect.succeed(

@@ -61,7 +61,9 @@ export const Plugin = define({
     // Persisting the reminder before the user's message is admitted gives the
     // ordering an explicit `--agent plan` already produces at session creation.
     const defaulted = new Set<Session.ID>()
-    ctx.session.hook("prompt", (event) =>
+    // `hook` registers only when its returned Effect runs (PluginHooks.register),
+    // so this must be yielded or the prompt hook never lands (#58287 repro).
+    yield* ctx.session.hook("prompt", (event) =>
       Effect.gen(function* () {
         if (defaulted.has(event.sessionID)) return
         const session = yield* ctx.session.get({ sessionID: event.sessionID }).pipe(Effect.orDie)
